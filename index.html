@@ -2,15 +2,15 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>ADA ERROR | DotCamera Studio</title>
+    <title>ADA ERROR | V.I.S.T.O DotCamera</title>
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
         canvas { width: 100%; height: 100%; display: block; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-family: monospace; }
+        #status { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; z-index: 10; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div id="loading">INICIALIZANDO SISTEMA V.I.S.T.O...</div>
+    <div id="status">SISTEMA INICIALIZANDO...</div>
     <canvas id="c"></canvas>
 
     <script src="https://cdn.jsdelivr.net/gh/google/swissgl@main/swissgl.js"></script>
@@ -18,111 +18,82 @@
 
     <script>
         const canvas = document.getElementById('c');
-        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
         
-        // Inicialização com tratamento de erro de WebGL2
         let glsl;
         try {
             glsl = SwissGL(canvas);
         } catch (e) {
-            loading.innerText = "ERRO: WebGL2 não suportado neste navegador.";
+            status.innerText = "ERRO: WEBGL2 NÃO SUPORTADO.";
         }
+
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+
+        const params = {
+            rgbMode: true,
+            pointSize: 4.0,
+            intensity: 20.0
+        };
 
         const gui = new dat.GUI();
+        gui.add(params, 'rgbMode');
+        gui.add(params, 'pointSize', 1, 15);
+        gui.add(params, 'intensity', 5, 50);
 
-        class DotCamera {
-            constructor(glsl, gui) {
-                this.video = document.createElement('video');
-                this.video.autoplay = true;
-                this.video.muted = true;
-                this.video.playsInline = true;
+        // Acesso à câmera com tratamento de erro robusto
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+        .then((stream) => {
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play();
+                status.innerText = "V.I.S.T.O ONLINE | ADA ERROR";
+                setTimeout(() => status.style.display = 'none', 3000);
+            };
+        })
+        .catch((err) => {
+            status.innerText = "ERRO: CÂMERA NÃO ENCONTRADA OU BLOQUEADA.";
+            console.error(err);
+        });
 
-                this.params = {
-                    dayMode: false,
-                    rgbMode: true,
-                    particleSize: 4.0
-                };
+        // Loop de renderização isolado para garantir estabilidade
+        function render(time) {
+            if (video.readyState >= 2) {
+                glsl.loop(({canvasSize, DPR}) => {
+                    // 1. Captura a textura do vídeo
+                    const tex = glsl({}, {data: video, tag: 'video'});
 
-                gui.add(this.params, 'dayMode');
-                gui.add(this.params, 'rgbMode');
-                gui.add(this.params, 'particleSize', 1.0, 20.0);
+                    // 2. Processa luminância e pontos
+                    const lum = glsl({tex: tex.edge.linear, rgbMode: params.rgbMode,
+                        VP: `vec2 r = vec2(ViewSize)/vec2(tex_size()); r /= max(r.x, r.y); VPos.xy = XY/r;`,
+                        FP: `FOut = tex(1.0-UV); if(!rgbMode) FOut.r = dot(FOut.rgb, vec3(0.21,0.72,0.07));`
+                    }, {scale: 1/2/DPR, tag: 'lum'});
 
-                navigator.mediaDevices.getUserMedia({ 
-                    video: { width: 1280, height: 720 } 
-                }).then((stream) => {
-                    this.video.srcObject = stream;
-                    this.video.play();
-                    loading.style.display = 'none'; // Remove o texto de loading
-                }).catch((err) => {
-                    loading.innerText = "ERRO: Acesso à câmera negado ou ocupada.";
-                    console.error(err);
+                    // 3. Render final das partículas (Efeito DotCamera)
+                    glsl({
+                        tex: lum.edge.miplinear,
+                        pointSize: params.pointSize,
+                        intensity: params.intensity,
+                        rgbMode: params.rgbMode,
+                        canvasSize,
+                        Mesh: [Math.floor(canvasSize.x/10), Math.floor(canvasSize.y/10)],
+                        VP: `
+                            vec2 uv = ID.xy / vec2(Grid-1);
+                            vec4 c = tex(uv);
+                            float l = dot(c.rgb, vec3(0.21,0.72,0.07));
+                            VPos.xy = (uv + XY * pointSize * l / canvasSize) * 2.0 - 1.0;
+                            varying vec3 color = rgbMode ? c.rgb : vec3(l);
+                        `,
+                        FP: `color * exp(-dot(XY,XY)*3.0), 1.0`
+                    });
                 });
             }
-
-            frame(glsl, {time, canvasSize, DPR}) {
-                // Auditoria de vídeo: Se o vídeo não está pronto, não desenha nada
-                if (this.video.readyState < 2) return;
-
-                // Captura a textura do vídeo
-                const tex = glsl({}, {data: this.video, tag: 'video'});
-                
-                const { dayMode, rgbMode, particleSize } = this.params;
-                const blendParams = dayMode ? {Clear:1, Blend:'d-s'} : {Clear:0, Blend:'d+s'};
-
-                // Processamento de Luminosidade
-                const lum = glsl({tex:tex.edge.linear, ...blendParams, rgbMode,
-                    VP:`vec2 r = vec2(ViewSize)/vec2(tex_size()); r /= max(r.x, r.y); VPos.xy = XY/r;`, 
-                    FP:`FOut = tex(1.0-UV); if(!rgbMode) FOut.r = dot(FOut.rgb, vec3(0.21,0.72,0.07));`
-                }, {scale:1/2/DPR, tag:'lum'});
-
-                // Cálculo de fluxo (Distorção Orgânica)
-                const merged = glsl({T:lum.edge.miplinear, FP:`
-                    for(float l=0.;l<8.;l++) FOut+=textureLod(T,UV,l); FOut/=8.0;`
-                }, {size:lum.size, format:'rgba16f', tag:'merged'});
-
-                const imgForce = glsl({T:merged.edge, FP:`
-                    vec2 s=T_step();
-                    vec4 a=T(UV-s), b=T(UV+vec2(s.x,-s.y)), c=T(UV+vec2(-s.x,s.y)), d=T(UV+s);
-                    FOut = b+d-a-c; FOut1 = c+d-a-b;`
-                }, {size:lum.size, layern:2, format:'rgba16f', tag:'grad'});
-
-                const field = glsl({}, {scale:1/4/DPR, format:'rgba16f', layern:3, filter:'linear', tag:'field'});
-                let points;
-
-                // Simulação de Partículas (Creative Coding Core)
-                for (let i=0; i<10; ++i) {
-                    points = glsl({field:field.edge, imgForce:imgForce.edge.linear, rgbMode, canvasSize, seed: Math.random(), 
-                        FP: `
-                        int c = rgbMode ? I.x%3 : 0;
-                        vec4 p=Src(I);
-                        if (p.w <= 0.0) { FOut = vec4(hash(ivec3(I, int(seed*1000.0))).xy, 0.0, 1.0); return; }
-                        vec2 imf = vec2(imgForce(p.xy,0)[c], imgForce(p.xy,1)[c]);
-                        vec2 force = field(p.xy, c).xy*10.0 + imf.xy*20.0;
-                        p.xy = clamp(p.xy + force/canvasSize, vec2(0), vec2(1));
-                        FOut = p;`
-                    }, {scale: (rgbMode?1.7:1)/8/DPR, story:2, format:'rgba32f', tag:'points'});
-
-                    glsl({points:points[0], Grid: points[0].size, Blend:'s+d', Clear:0, rgbMode,
-                        VP:`VPos.xy = (points(ID.xy).xy + XY*15.0/canvasSize)*2.0-1.0;
-                            int c = rgbMode ? ID.x%3 : 0; varying vec3 color = vec3(c==0,c==1,c==2);`,
-                        FP:`vec4 v = vec4(vec3(XY,1.)*exp(-dot(XY,XY)*vec3(4,4,8)), 0);
-                            FOut=v*color.r; FOut1=v*color.g; FOut2=v*color.b;`
-                    }, field);
-                }
-
-                // Render Final na Tela
-                glsl({points:points[0], Grid: points[0].size, ...blendParams, rgbMode, particleSize, canvasSize,
-                    VP:`VPos.xy = (points(ID.xy).xy + XY*particleSize/canvasSize)*2.0-1.0;
-                        int c = ID.x%3; varying vec3 col = rgbMode ? vec3(c==0,c==1,c==2) : vec3(1);`,
-                    FP:`col*exp(-dot(XY,XY)*3.0),1`
-                });
-            }
+            requestAnimationFrame(render);
         }
 
-        const demo = new DotCamera(glsl, gui);
-        glsl.loop(({time, canvasSize, DPR}) => {
-            demo.frame(glsl, {time, canvasSize, DPR});
-        });
+        requestAnimationFrame(render);
     </script>
 </body>
 </html>
