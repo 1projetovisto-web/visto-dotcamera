@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ADA ERROR - DOTCAM RECORDING</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+</head>
+<body>
+    <canvas id="c"></canvas>
+    <script src="https://cdn.jsdelivr.net/gh/google/swissgl@main/swissgl.js"></script>
+    <script>
+        const canvas = document.getElementById('c');
+        let glsl;
+        
+        try {
+            glsl = SwissGL(canvas);
+        } catch (e) {
+            alert("WebGL2 Error. Tente usar o Chrome.");
+        }
+
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+
+        // TENTANDO FORÇAR A BRIO DE FORÇA BRUTA
+        navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                width: { min: 640, ideal: 1280 }, 
+                height: { min: 480, ideal: 720 } 
+            } 
+        }).then(stream => {
+            video.srcObject = stream;
+            video.play();
+        }).catch(err => {
+            console.error("Erro na Cam:", err);
+            alert("Acesse as configurações do Chrome e mude a câmera para a BRIO manualmente.");
+        });
+
+        function render() {
+            if (video.readyState >= 2) {
+                glsl.loop(({canvasSize, DPR}) => {
+                    const tex = glsl({}, {data: video, tag: 'video'});
+                    
+                    // Lógica DotCamera simplificada e estável para gravação de tela
+                    glsl({
+                        tex: tex.edge.miplinear,
+                        Mesh: [160, 90], // Resolução dos pontos
+                        VP: `
+                            vec2 uv = ID.xy / vec2(Grid-1);
+                            vec4 c = tex(uv);
+                            float l = dot(c.rgb, vec3(0.21,0.72,0.07));
+                            // O 8.0 controla o tamanho dos pontos, mude conforme o gosto
+                            VPos.xy = (uv + XY * 8.0 * l / canvasSize) * 2.0 - 1.0;
+                            varying vec3 col = c.rgb;
+                        `,
+                        FP: `col * exp(-dot(XY,XY)*3.0), 1.0`
+                    });
+                });
+            }
+            requestAnimationFrame(render);
+        }
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
