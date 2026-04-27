@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Ada Error - DotCamera</title>
+    <title>VJ Ada Error | DotCamera Setup</title>
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-        canvas { width: 100%; height: 100%; display: block; }
+        canvas { width: 100%; height: 100%; display: block; filter: contrast(1.2) brightness(1.1); }
     </style>
 </head>
 <body>
@@ -18,41 +18,53 @@
         const glsl = SwissGL(canvas);
         const gui = new dat.GUI();
 
-        // Aqui entra a sua classe exatamente como você colou
         class DotCamera {
             constructor(glsl, gui) {
                 this.video = document.createElement('video');
+                this.video.autoplay = true;
+                this.video.muted = true;
+                this.video.playsinline = true; // Essencial para mobile/safari
+
                 this.dayMode = false; gui.add(this, 'dayMode');
-                this.rgbMode = false; gui.add(this, 'rgbMode');
-                navigator.mediaDevices.getUserMedia({ video: true })
-                  .then((stream) => {
+                this.rgbMode = true; gui.add(this, 'rgbMode'); // Começar colorido (Neon)
+
+                navigator.mediaDevices.getUserMedia({ 
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } } 
+                })
+                .then((stream) => {
                     this.video.srcObject = stream;
-                    this.video.play();
-                  }).catch((error) => {
-                    console.error('Erro na camera:', error);
-                  });
+                    this.video.onloadedmetadata = () => {
+                        this.video.play();
+                        console.log("Fluxo de vídeo iniciado.");
+                    };
+                }).catch((e) => console.error('Erro na camera:', e));
             }
 
             frame(glsl, {time, canvasSize, DPR}) {
-                let tex;
-                if (this.video.videoWidth) {
-                    tex = glsl({}, {data:this.video, tag:'video'});
-                } else {
-                    tex = glsl({time, FP:`step(0.0, sin(length(XY)*20.0-time*3.0+atan(XY.x,XY.y)*3.))*0.25`},
-                        {size:[512, 512], tag:'tmp'});
+                // SÓ RENDERIZA SE O VÍDEO ESTIVER PRONTO
+                if (!this.video || this.video.readyState < 2) {
+                    glsl({time, FP:`FOut = vec4(0.0, 0.0, 0.0, 1.0);`});
+                    return;
                 }
+
+                let tex = glsl({}, {data:this.video, tag:'video'});
+                
                 const blendParams = this.dayMode ? {Clear:1, Blend:'d-s'} : {Clear:0, Blend:'d+s'};
                 const rgbMode = this.rgbMode;
+                
                 const lum = glsl({tex:tex.edge.linear, ...blendParams, rgbMode,
-                    VP:`vec2 r = vec2(ViewSize)/vec2(tex_size()); r /= max(r.x, r.y); VPos.xy = XY/r;`, FP:`
+                    VP:`vec2 r = vec2(ViewSize)/vec2(tex_size()); r /= max(r.x, r.y); VPos.xy = XY/r;`, 
+                    FP:`
                     FOut = tex(1.0-UV);
                     if (!rgbMode) {
                         FOut.r = dot(FOut.rgb, vec3(0.21,0.72,0.07));
                     }`},
                     {scale:1/2/DPR, tag:'lum'});
+
                 const merged = glsl({T:lum.edge.miplinear, FP:`
                     for (float lod=0.; lod<8.0; lod+=1.0) {FOut += textureLod(T, UV, lod);}
                     FOut /= 8.0;`}, {size:lum.size, format:'rgba16f', tag:'merged'});
+
                 const imgForce = glsl({T:merged.edge, FP:`
                     vec2 s=T_step();
                     vec4 a=T(UV-s), b=T(UV+vec2(s.x,-s.y)), c=T(UV+vec2(-s.x,s.y)), d=T(UV+s);
@@ -62,6 +74,7 @@
                 const arg = {canvasSize, rgbMode};
                 const field = glsl({}, {scale:1/4/DPR, format:'rgba16f', layern:3, filter:'linear', tag:'field'});
                 let points;
+
                 for (let i=0; i<10; ++i) {
                     points = glsl({...arg, field:field.edge, imgForce:imgForce.edge.linear, seed: Math.random()*124237, FP: `
                         int c = rgbMode ? I.x%3 : 0;
@@ -76,6 +89,7 @@
                         p.xy = clamp(p.xy + force/canvasSize, vec2(0), vec2(1));
                         FOut = p;
                     `}, {scale:(rgbMode?1.7:1)/8/DPR, story:2, format:'rgba32f', tag:'points'});
+
                     glsl({...arg, points:points[0], Grid: points[0].size, Blend:'s+d', Clear:0, VP:`
                         VPos.xy = (points(ID.xy).xy + XY*15.0/canvasSize)*2.0-1.0;
                         int c = rgbMode ? ID.x%3 : 0;
@@ -83,6 +97,7 @@
                         vec4 v = vec4(vec3(XY,1.)*exp(-dot(XY,XY)*vec3(4,4,8)), 0);
                         FOut=v*color.r; FOut1=v*color.g; FOut2=v*color.b;`}, field)
                 }
+
                 glsl({...arg, points:points[0], Grid: points[0].size, ...blendParams, VP:` 
                     VPos.xy = (points(ID.xy).xy + XY*4.0/canvasSize)*2.0-1.0;
                     int c = ID.x%3;
@@ -91,7 +106,6 @@
             }
         }
 
-        // Instancia a classe e inicia o loop de renderização
         const demo = new DotCamera(glsl, gui);
         function render(time) {
             glsl.loop(({time, canvasSize, DPR}) => {
