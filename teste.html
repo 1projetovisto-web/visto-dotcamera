@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<body style="background:black; display:flex; justify-content:center; align-items:center; height:100vh;">
+    <video id="v" autoplay playsinline muted style="width:80%; border:5px solid neon;"></video>
+    <script>
+        navigator.mediaDevices.getUserMedia({video: true})
+        .then(s => document.getElementById('v').srcObject = s)
+        .catch(e => alert("Câmera bloqueada: " + e));
+    </script>
+</body>
+</html>
